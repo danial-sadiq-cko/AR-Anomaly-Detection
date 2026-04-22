@@ -1,16 +1,21 @@
 """
 Anomaly Detection Agent
------------------------
+Folder: ~/Desktop/AnomalyDetection/
+-----------------------------------------
 Detects statistically significant anomalies across three payment metrics:
   - Acceptance Rate (AR)  — flags significant DROPS    (t-stat < -2.576)
   - Fraud Rate            — flags significant INCREASES (t-stat > +2.576)
   - Dispute Rate          — flags significant INCREASES (t-stat > +2.576)
 
-Results are written to a dated CSV file:
+Results are written to a dated CSV file in the same folder:
     AnomalyFile_YYYY-MM-DD.csv
 
+A slack_summary.json is also written; Claude reads it and posts the top-5
+summary to #anomaly-detection via its Slack MCP integration.
+
 Usage:
-    python anomaly_agent.py
+    cd ~/Desktop/AnomalyDetection
+    python3 anomaly_agent.py
 
 Requirements:
     pip install -r requirements.txt

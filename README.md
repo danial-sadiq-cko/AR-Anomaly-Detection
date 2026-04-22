@@ -2,7 +2,7 @@
 
 ## What This Does
 
-This agent automatically detects when a merchant's payment performance has moved significantly outside its normal range. Every time it runs it queries the last 30 days of payment data from BigQuery, applies statistical anomaly detection across three metrics, and writes all flagged merchants to a dated CSV file.
+This tool automatically detects when a merchant's payment performance has moved significantly outside its normal range. Every time it runs it queries the last 30 days of payment data from BigQuery, applies statistical anomaly detection across three metrics, and writes all flagged merchants to a dated CSV file. It also posts a summary of the top 5 merchants to the `#anomaly-detection` Slack channel automatically.
 
 **Three metrics are monitored:**
 
@@ -14,63 +14,74 @@ This agent automatically detects when a merchant's payment performance has moved
 
 ---
 
+## Folder Structure
+
+```
+AnomalyDetection/
+├── anomaly_agent.py       # Main script — run this to generate the CSV
+├── requirements.txt       # Python dependencies
+├── README.md              # This file
+├── AnomalyFile_YYYY-MM-DD.csv   # Output file (created on each run)
+└── slack_summary.json     # Intermediate file used to post to Slack (auto-generated)
+```
+
+---
+
 ## How to Run
+
+### First-time setup
+
+```bash
+# 1. Navigate to the folder
+cd ~/Desktop/AnomalyDetection
+
+# 2. Install dependencies (one-time only)
+pip install -r requirements.txt
+
+# 3. Authenticate with Google Cloud (one-time only, or if your credentials expire)
+gcloud auth application-default login
+```
+
+### Running the agent
+
+```bash
+cd ~/Desktop/AnomalyDetection
+python3 anomaly_agent.py
+```
+
+That's it. The agent will:
+1. Connect to BigQuery and run the anomaly detection query
+2. Write results to `AnomalyFile_YYYY-MM-DD.csv` in the same folder
+3. Automatically post a Slack summary to `#anomaly-detection`
+
+Running it again on the same day deletes the old file and writes a fresh one.
 
 **Prerequisites:**
 - Python 3.8 or higher
 - Access to the `cko-ca-prod-6784` GCP project
-- Google Cloud SDK authenticated: `gcloud auth application-default login`
-- A Slack Incoming Webhook URL set as an environment variable (see Slack Setup below)
-
-```bash
-# Step 1 — Install dependencies (first time only)
-pip install -r requirements.txt
-
-# Step 2 — Run the agent
-python anomaly_agent.py
-```
-
-The agent prints progress to the terminal, writes a CSV to the same folder, and writes a `slack_summary.json` file. Claude then automatically posts the Slack summary — no webhook setup needed:
-
-```
-AnomalyFile_2026-04-13.csv
-```
-
-Running it again on the same day automatically deletes the old file and writes a fresh one.
-
-**To share results:** just send the CSV — no credentials or software needed to open it.
+- Google Cloud SDK authenticated (`gcloud auth application-default login`)
 
 ---
 
-## Slack Integration
+## What You Get
 
-Every time the agent runs it automatically posts a summary of the **top 5 merchants by Lost Volume Amount** to the `#anomaly-detection` Slack channel. **No webhook URL or manual setup is required** — Slack posting is handled by Claude's built-in Slack MCP integration.
+### Output CSV
 
-### How it works
+A file named `AnomalyFile_YYYY-MM-DD.csv` is created in the `AnomalyDetection` folder each time the agent runs. Each row represents one merchant channel where an anomaly was detected.
 
-1. The agent writes the CSV as normal.
-2. It also writes a `slack_summary.json` file to the same folder containing the formatted message.
-3. Claude reads that file and posts the message directly to `#anomaly-detection` (channel ID: `C0AK1TJ5P16`) via its Slack MCP connection.
+**To share results:** just send the CSV — no credentials or software needed to open it.
 
-Because Slack posting goes through Claude rather than a webhook, there is nothing to configure — no environment variables, no Slack app setup, no tokens.
+### Slack Summary
 
-### What gets posted
+After writing the CSV, the agent automatically posts a summary to `#anomaly-detection` showing the **top 5 merchants by Lost Volume Amount**. The message breaks down:
+- Merchant name, date, anomaly type, total lost payments and volume
+- Per-channel breakdown with severity status and a direct Looker link for each channel
 
-Each run posts one message to `#anomaly-detection` containing:
-
-- Run date, confidence threshold, and baseline window
-- For each of the **top 5 aliases by Lost Volume Amount (AR Anomaly only)**:
-  - Date of Detection
-  - Anomaly Type
-  - Lost Payments (total across all channels)
-  - Lost Volume Amount (total USD across all channels)
-  - Per-channel breakdown: Channel ID, Overall Status, MIT flag, Lost Payments, Lost Amount, Looker link
+Slack posting is handled by Claude's built-in Slack MCP integration — no webhook URL or manual setup is required.
 
 ---
 
 ## Understanding the Output File
-
-Each row in the CSV represents one merchant channel where an anomaly was detected. Here is what every column means:
 
 | Column | What it means |
 |---|---|
@@ -81,12 +92,14 @@ Each row in the CSV represents one merchant channel where an anomaly was detecte
 | `is_mit` | Whether transactions are Merchant-Initiated (`True`) or Customer-Initiated (`False`) |
 | `t_stat_alias_global` | How far the merchant's overall metric has moved from its 15-day average, in standard deviations. Values beyond ±2.576 are statistically significant at 99% confidence |
 | `t_stat_channel_specific` | Same as above but measured at the individual channel level rather than across the whole merchant |
-| `channel_vol_share_pct` | What percentage of this merchant's total payment volume flows through this channel yesterday. High % = this is the merchant's primary channel |
-| `Total_Volume_Amount_Lost` | **AR only.** Estimated USD revenue lost due to the acceptance rate drop: `(normal AR − actual AR) × volume × avg transaction value` |
-| `Lost_Volume` | **AR:** estimated number of payments that should have been accepted but weren't. **Fraud/Dispute:** raw count of fraud reports or disputes yesterday |
+| `channel_vol_share_pct` | What % of this merchant's total payment volume flows through this channel. High % = this is the merchant's primary channel |
+| `Total_Volume_Amount_Lost` | **AR only.** Estimated USD revenue lost due to the AR drop: `(normal AR − actual AR) × volume × avg transaction value` |
+| `Lost_Volume` | **AR:** estimated payments that should have been accepted but weren't. **Fraud/Dispute:** raw count of fraud reports or disputes yesterday |
 | `ATV` | **AR only.** Average Transaction Value (USD) for this channel yesterday |
 | `Date_of_Detection` | The date the agent was run |
 | `Link_to_Look` | Clickable link to the Looker dashboard pre-filtered to this merchant, MIT flag, and the **single channel ID in that row** — each row links to its own channel independently |
+| `Account_Manager_Name` | Account manager from Salesforce |
+| `Account_Manager_Email` | Account manager email from Salesforce |
 
 ### Severity Levels
 
@@ -105,7 +118,6 @@ Each row in the CSV represents one merchant channel where an anomaly was detecte
 
 For each merchant and channel, the agent calculates a **15-day statistical baseline** (mean and standard deviation) for the metric. It then compares yesterday's value against that baseline using a **t-test** — a standard statistical technique that measures how unusual a data point is relative to its history.
 
-The t-test formula:
 ```
 t = (yesterday's value − 15-day average) / (standard deviation ÷ √number_of_days)
 ```
@@ -141,6 +153,7 @@ The volume thresholds prevent low-volume channels from generating noise — a ch
 | `cko-data-plc-prod-1775.salesforce.map_entity_merchant_to_salesforce_account` | Maps internal entity/merchant IDs to Salesforce account IDs |
 | `cko-data-plc-prod-1775.salesforce.dim_salesforce_account` | Maps Salesforce account IDs to merchant alias names |
 | `cko-data-plc-prod-1775.salesforce.dim_salesforce_alias` | Resolves the final display name (alias) for each merchant |
+| `cko-data-ba-prod-1324.int_salesforce.int_salesforce_alias` | Maps alias to account manager name and email |
 
 The query looks back **30 days** to compute the 15-day baseline with enough buffer for data availability.
 
@@ -148,7 +161,7 @@ The query looks back **30 days** to compute the 15-day baseline with enough buff
 
 ## SQL Structure — CTE Walkthrough
 
-The SQL query is built as a chain of CTEs (Common Table Expressions). Each CTE is one step in the pipeline. Here is the flow:
+The SQL query is built as a chain of CTEs (Common Table Expressions). Each CTE is one step in the pipeline:
 
 ```
 raw_performance
@@ -187,3 +200,5 @@ raw_performance
 - **`CAST(NULL AS FLOAT64)`**: Fraud and dispute rows don't have a revenue loss figure or ATV. These columns are left empty (`NULL`) with an explicit type so BigQuery's `UNION ALL` doesn't have a type mismatch error.
 - **30-day lookback, 15-day effective baseline**: The `WHERE` clause fetches 30 days so there's always enough data even if yesterday's data arrives late. The `STDDEV`/`AVG` then naturally use however many days are present.
 - **Double-quoted alias in Looker URL**: The `Alias=` filter parameter wraps the merchant name in double quotes (e.g. `Alias=%22Zilch%20USA%2C%20Inc.%22`). Without this, Looker interprets the comma in names like "Zilch USA, Inc." as a delimiter between two separate filter values. The surrounding `%22` characters (URL-encoded double quotes) tell Looker to treat everything inside as a single string.
+- **Per-channel Looker links**: Each row's `Link_to_Look` URL filters on only that row's channel ID, so clicking the link opens Looker scoped to that single channel. This replaced an earlier approach that included all of a merchant's channels in every link.
+- **Slack message splitting**: The Slack summary is split into one message per merchant (plus a header) so each post stays within Slack's 5000-character limit. Channel breakdown is capped at 5 channels per merchant; any overflow is noted with a reference to the CSV.
