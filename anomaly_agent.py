@@ -37,7 +37,7 @@ from google.cloud import bigquery
 # Configuration
 # ---------------------------------------------------------------------------
 
-BILLING_PROJECT    = "cko-ca-prod-6784"
+BILLING_PROJECT    = "aicoe-452013"
 OUTPUT_DIR         = os.path.dirname(os.path.abspath(__file__))
 
 # Slack channel ID for #anomaly-detection.
@@ -117,18 +117,18 @@ WITH raw_performance AS (
   FROM `cko-data-plc-prod-1775.payment.fct_payin_daily` AS fct_payin
   -- Join on entity_id first, then merchant_account_id as a fallback,
   -- to resolve the internal payment record to a Salesforce account
-  LEFT JOIN `cko-data-plc-prod-1775.salesforce.map_entity_merchant_to_salesforce_account`
+  LEFT JOIN `cko-data-ba-prod-1324.mapping.map_entity_merchant_to_salesforce_account`
     AS map_account_entity
     ON fct_payin.entity_id = map_account_entity.entity_id
-  LEFT JOIN `cko-data-plc-prod-1775.salesforce.map_entity_merchant_to_salesforce_account`
+  LEFT JOIN `cko-data-ba-prod-1324.mapping.map_entity_merchant_to_salesforce_account`
     AS map_account_merchant
     ON fct_payin.merchant_account_id = CAST(map_account_merchant.merchant_account_id AS STRING)
   -- Resolve Salesforce account ID to account details
-  LEFT JOIN `cko-data-plc-prod-1775.salesforce.dim_salesforce_account` AS dim_salesforce_account
+  LEFT JOIN `cko-data-ba-prod-1324.salesforce.dim_salesforce_account` AS dim_salesforce_account
     ON COALESCE(map_account_entity.account_id, map_account_merchant.account_id)
        = dim_salesforce_account.account_id
   -- Resolve to the final human-readable merchant alias name
-  LEFT JOIN `cko-data-plc-prod-1775.salesforce.dim_salesforce_alias` AS dim_salesforce_alias
+  LEFT JOIN `cko-data-ba-prod-1324.salesforce.dim_salesforce_alias` AS dim_salesforce_alias
     ON dim_salesforce_account.salesforce_alias = dim_salesforce_alias.salesforce_alias
   -- 30-day window gives enough data for a stable 15-day baseline,
   -- with buffer in case yesterday's data arrives slightly late
@@ -389,10 +389,12 @@ dispute_computed AS (
 
 account_manager_lookup AS (
   SELECT
-    salesforce_alias,
-    account_manager        AS Account_Manager_Name,
-    account_manager_email  AS Account_Manager_Email
-  FROM `cko-data-ba-prod-1324.int_salesforce.int_salesforce_alias`
+    a.salesforce_alias,
+    a.account_manager_name AS Account_Manager_Name,
+    e.email                AS Account_Manager_Email
+  FROM `cko-data-ba-prod-1324.salesforce.dim_salesforce_alias` a
+  LEFT JOIN `cko-data-ba-prod-1324.salesforce.dim_employee` e
+    ON a.account_manager_id = e.user_id
 ),
 
 -- ====================================================================
@@ -619,7 +621,7 @@ def build_slack_messages(rows: list[dict], today: str) -> list[str]:
         if i == len(top5) - 1:
             lines.append("")
             lines.append("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
-            lines.append("_Powered by Anomaly Detection Agent · Project: cko-ca-prod-6784_")
+            lines.append("_Powered by Anomaly Detection Agent · Project: aicoe-452013_")
 
         messages.append("\n".join(lines))
 
